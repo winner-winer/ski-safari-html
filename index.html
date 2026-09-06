@@ -16,6 +16,8 @@
   .small{font-size:13px;opacity:.9}
   .missions{text-align:left;display:inline-block;margin-top:8px;font-size:14px;line-height:1.7}
   .hidden{display:none}
+  #zoomCtl{position:fixed;right:14px;bottom:14px;z-index:4;display:flex;gap:8px}
+  #zoomCtl button{width:46px;height:46px;border-radius:14px;border:0;background:rgba(8,35,58,.78);color:#fff;font-size:30px;font-weight:900;box-shadow:0 4px 0 rgba(0,0,0,.25)}
 </style>
 </head>
 <body>
@@ -39,6 +41,7 @@
     <button class="btn" id="retryBtn">再来一局</button>
   </div>
 </div>
+<div id="zoomCtl"><button id="zout" aria-label="缩小">-</button><button id="zin" aria-label="放大">+</button></div>
 <script>
 'use strict';
 /* ========================= 工具与配置 ========================= */
@@ -61,6 +64,10 @@ addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));
 canvas.addEventListener('pointerdown',e=>{pointerDown=true;pointerY=e.clientY;game.jumpBuffer=0.14;if(game.state==='menu')game.start();else if(game.state==='over')game.start();});
 addEventListener('pointerup',()=>{pointerDown=false;});
 addEventListener('pointermove',e=>{pointerY=e.clientY;});
+function setZoom(z){game.zoom=clamp(z,.72,1.65);}
+document.getElementById('zin').onclick=()=>setZoom(game.zoom+.12);
+document.getElementById('zout').onclick=()=>setZoom(game.zoom-.12);
+canvas.addEventListener('wheel',e=>{e.preventDefault();setZoom(game.zoom+(e.deltaY<0?.1:-.1));},{passive:false});
 
 /* ========================= 任务与成就 ========================= */
 const store={
@@ -113,7 +120,7 @@ const game={
   init(){this.terrain=makeTerrain(this);this.resetStats();this.player=this.newPlayer();},
   resetStats(){this.stats={penguins:0,maxFlips:0,clouds:0,wolfJump:0,shields:0,maxMult:1};},
   newPlayer(){return{x:W*.28,y:H*.6,vy:0,onGround:true,flip:0,takeoffFlip:0,rot:0,alive:true,airNear:false};},
-  start(){this.state='play';menuEl.classList.add('hidden');overEl.classList.add('hidden');this.scroll=0;this.distance=0;this.score=0;this.coins=0;this.mult=1;this.speed=this.baseSpeed=22;this.boostLevel=0;this.boostTimer=0;this.rocketTimer=0;this.magnetTimer=0;this.shield=0;this.reviveRocket=false;this.obstacles=[];this.pickups=[];this.particles=[];this.clouds=[];this.mount=null;this.avalancheGap=720;this.shake=0;this.jumpBuffer=0;this.coyote=0;this.spawnT=.8;this.coinT=.3;this.powerT=4;this.mountT=6;this.cloudT=.8;this.resetStats();this.player=this.newPlayer();},
+  start(){this.state='play';menuEl.classList.add('hidden');overEl.classList.add('hidden');this.scroll=0;this.distance=0;this.score=0;this.coins=0;this.zoom=1;this.mult=1;this.speed=this.baseSpeed=22;this.boostLevel=0;this.boostTimer=0;this.rocketTimer=0;this.magnetTimer=0;this.shield=0;this.reviveRocket=false;this.obstacles=[];this.pickups=[];this.particles=[];this.clouds=[];this.mount=null;this.avalancheGap=720;this.shake=0;this.jumpBuffer=0;this.coyote=0;this.spawnT=.8;this.coinT=.3;this.powerT=4;this.mountT=6;this.cloudT=.8;this.resetStats();this.player=this.newPlayer();},
   togglePause(){if(this.state==='play')this.state='pause';else if(this.state==='pause')this.state='play';},
   addScore(points,label,flash=true){this.score+=Math.round(points*this.mult);if(flash&&label)spawnText(label+' +'+Math.round(points*this.mult),this.player.x,this.player.y-70);},
   bumpMult(v){this.mult=clamp(this.mult+v,1,8);this.stats.maxMult=Math.max(this.stats.maxMult,this.mult);},
@@ -121,7 +128,7 @@ const game={
   land(gy){const p=this.player;p.y=gy;p.onGround=true;const rel=p.flip-p.takeoffFlip;const diff=((rel-Math.round(rel/TAU)*TAU+Math.PI)%TAU+TAU)%TAU-Math.PI;const flips=Math.floor((rel+1.0)/TAU);this.stats.maxFlips=Math.max(this.stats.maxFlips,flips);if(Math.abs(diff)>.95){if(!this.absorbCrash('落地姿势不正')){this.crash('落地姿势不正');return;}}if(flips>=1){this.addScore(350*flips,'后空翻 x'+flips);this.bumpMult(.8*flips);if(this.mount&&this.mount.kind==='eagle'){this.boost(1.4);spawnText('老鹰落地加速!',p.x,p.y-90);}}else if(p.airTime>0.35)this.addScore(p.airTime*35,'Air');p.vy=0;p.flip=Math.round(rel/TAU)*TAU+p.takeoffFlip;},
   boost(level){this.boostLevel=clamp(this.boostLevel+level,0,3);this.boostTimer=4;if(level>=3)this.shield=Math.max(this.shield,1);},
   absorbCrash(reason){
-    if(this.shield>0){this.shield--;spawnText('Shield -1',this.player.x,this.player.y-80);this.shake=.5;return true;}
+    if(this.shield>0){this.shield--;spawnText('护盾抵消',this.player.x,this.player.y-80);this.shake=.5;return true;}
     const m=this.mount;
     if(m){
       if(m.kind==='snowmobile'&&(reason.includes('rock')||reason.includes('stone'))){spawnText('Smashed!',this.player.x,this.player.y-80);this.addScore(120,'Smash');return true;}
@@ -147,6 +154,7 @@ const game={
       else {this.mount={kind,hits,timer,passenger:null};}
     }else this.mount={kind,hits,timer,passenger:null};
     if(kind==='penguin')this.stats.penguins++;this.bumpMult(1);this.addScore(200,'骑乘 '+kind);},
+  lootHouse(ob){ob.looted=true;const r=Math.random();if(r<.55){this.applyMount('snowmobile');spawnText('木屋里搜到雪橇!',ob.x,ob.y-70);}else if(r<.85){this.shield=Math.min(5,this.shield+2);this.stats.shields++;spawnText('木屋里搜到护盾!',ob.x,ob.y-70);}else{this.rocketTimer=3.2;spawnText('木屋里搜到火箭!',ob.x,ob.y-70);}this.addScore(120,'搜刮木屋');},
   update(dt){
     if(this.state!=='play')return;
     dt=Math.min(dt,1/20);if(this.slowmo>0){this.slowmo-=dt;dt*=.55;}
@@ -183,7 +191,8 @@ const game={
     this.clouds=this.clouds.filter(c=>c.x>-160);
     // 碰撞检测：先护盾/坐骑抵挡，蓝色加速/雪地摩托可撞碎石/房
     const phw=22,phh=26;
-    if(!eagle&&p.alive)for(const ob of this.obstacles){const [ohw,ohh]=ob.half();if(Math.abs(ob.x-p.x)<ohw+phw&&Math.abs(ob.y-p.y)<ohh+phh){if(!p.onGround&&p.y-phh>ob.y+ohh*.62)continue;const smash=(this.boostLevel>=3||this.rocketTimer>0||(this.mount&&this.mount.kind==='snowmobile'))&&(ob.kind==='rock'||ob.kind==='house');if(smash){ob.dead=true;this.addScore(120,'Smash '+ob.kind);for(let i=0;i<14;i++)this.particles.push(new Particle(ob.x,ob.y,rand(-240,240),rand(-360,80),rand(.4,.9),'#dbe7f3',rand(2,5)));continue;}if(this.absorbCrash(ob.kind)){ob.dead=true;continue;}this.crash('撞上 '+ob.kind);break;}}
+    if(!eagle&&p.alive)for(const ob of this.obstacles){const [ohw,ohh]=ob.half();if(Math.abs(ob.x-p.x)<ohw+phw&&Math.abs(ob.y-p.y)<ohh+phh){if(!p.onGround&&p.y-phh>ob.y+ohh*.62)continue;if(ob.kind==='house'){if(!ob.looted)this.lootHouse(ob);continue;}
+      const smash=(this.boostLevel>=3||this.rocketTimer>0||(this.mount&&this.mount.kind==='snowmobile'))&&ob.kind==='rock';if(smash){ob.dead=true;this.addScore(120,'Smash '+ob.kind);for(let i=0;i<14;i++)this.particles.push(new Particle(ob.x,ob.y,rand(-240,240),rand(-360,80),rand(.4,.9),'#dbe7f3',rand(2,5)));continue;}if(this.absorbCrash(ob.kind)){ob.dead=true;continue;}this.crash('撞上 '+ob.kind);break;}}
     this.obstacles=this.obstacles.filter(o=>!o.dead);
     // 雪崩追击：从左侧后方追，骑乘/火箭/道具会拉开距离
     let avSpeed=16+this.distance*.0017;if(this.rocketTimer>0)this.avalancheGap+=180*dt;if(this.boostLevel>=2)this.avalancheGap+=70*dt;if(this.mount)this.avalancheGap+=30*dt;this.avalancheGap-=(avSpeed-this.speed)*18*dt;this.avalancheGap=clamp(this.avalancheGap,0,900);if(this.avalancheGap<38&&p.alive){if(!this.absorbCrash('雪崩'))this.crash('被雪崩吞没');}
@@ -261,7 +270,9 @@ function drawMountIcon(kind,x,y,s=1){ctx.save();ctx.translate(x,y);ctx.scale(s,s
   else if(kind==='snowmobile'){shadow(4,20,36,7,.3);let g=ctx.createLinearGradient(-34,-12,36,16);g.addColorStop(0,'#f87171');g.addColorStop(1,'#7f1d1d');ctx.fillStyle=g;ctx.beginPath();ctx.moveTo(-36,6);ctx.lineTo(-10,-14);ctx.lineTo(26,-12);ctx.lineTo(38,8);ctx.lineTo(18,15);ctx.lineTo(-22,15);ctx.closePath();ctx.fill();g=ctx.createLinearGradient(24,-14,38,-2);g.addColorStop(0,'#e2e8f0');g.addColorStop(1,'#64748b');ctx.fillStyle=g;rr(25,-16,13,10,4);ctx.fill();ctx.strokeStyle='#1f2937';ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(-32,20);ctx.lineTo(36,20);ctx.stroke();ctx.strokeStyle='#94a3b8';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(-24,25);ctx.lineTo(28,25);ctx.stroke();ctx.strokeStyle='#111827';ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(24,-12);ctx.lineTo(38,-22);ctx.stroke();}
   ctx.restore();}
 function drawPlayer(){const p=game.player;ctx.save();ctx.translate(p.x,p.y);const slope=game.terrain.slope(p.x);const ang=slope-(p.onGround?0:(p.flip-p.takeoffFlip));ctx.rotate(ang);ctx.scale(1.24,1.24);
+  if(game.shield>0){const rr=50+Math.sin(performance.now()/140)*4;ctx.fillStyle='rgba(56,189,248,.16)';ctx.beginPath();ctx.arc(0,0,rr,0,TAU);ctx.fill();ctx.strokeStyle='rgba(125,211,252,.95)';ctx.lineWidth=4;ctx.stroke();ctx.fillStyle='#7dd3fc';ctx.font='bold 18px system-ui';ctx.textAlign='center';ctx.fillText('护盾生效 x'+game.shield,0,-46);}
   shadow(2,34,34,7,.28);
+  if(game.mount){ctx.save();ctx.translate(0,34);ctx.scale(1.28,.72);drawMountIcon(game.mount.kind,0,0,1.08);ctx.restore();}
   const ski=ctx.createLinearGradient(-30,0,34,0);ski.addColorStop(0,'#60a5fa');ski.addColorStop(1,'#1d4ed8');ctx.fillStyle=ski;rr(-34,24,70,6,3);ctx.fill();rr(-29,16,62,6,3);ctx.fill();ctx.fillStyle='#0f172a';rr(-8,13,16,8,3);ctx.fill();
   ctx.strokeStyle='#1f2937';ctx.lineWidth=8;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(-9,16);ctx.lineTo(-16,28);ctx.moveTo(11,16);ctx.lineTo(20,27);ctx.stroke();
   const body=ctx.createLinearGradient(0,-8,0,24);body.addColorStop(0,'#fb7185');body.addColorStop(1,'#b91c1c');ctx.fillStyle=body;ctx.beginPath();ctx.moveTo(-18,-4);ctx.lineTo(14,-9);ctx.lineTo(23,19);ctx.lineTo(-13,25);ctx.closePath();ctx.fill();ctx.fillStyle='rgba(255,255,255,.28)';ctx.beginPath();ctx.moveTo(-14,-2);ctx.lineTo(4,-5);ctx.lineTo(0,20);ctx.lineTo(-10,22);ctx.fill();
@@ -270,7 +281,6 @@ function drawPlayer(){const p=game.player;ctx.save();ctx.translate(p.x,p.y);cons
   // 围巾/速度线：向前运动时向后飘
   const spd=clamp((game.speed-20)/50,0,1);ctx.strokeStyle='#ffd166';ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(-8,-12);ctx.quadraticCurveTo(-28-spd*24,-8-spd*8,-46-spd*36,-2+Math.sin(performance.now()/90)*4);ctx.stroke();
   if(game.speed>34){ctx.strokeStyle='rgba(255,255,255,.55)';ctx.lineWidth=2;for(let i=0;i<4;i++){ctx.beginPath();ctx.moveTo(-38-i*10,4+i*7);ctx.lineTo(-64-i*16-spd*20,4+i*7);ctx.stroke();}}
-  if(game.mount){ctx.globalAlpha=.98;drawMountIcon(game.mount.kind,-8,38,1.05);ctx.globalAlpha=1;}
   ctx.restore();}
 function drawObstacle(ob){ctx.save();ctx.translate(ob.x,ob.y);if(ob.kind==='tree'){shadow(0,44,24,6,.22);ctx.fillStyle='#6b442a';rr(-6,16,12,32,4);ctx.fill();let g=ctx.createLinearGradient(0,-44,0,28);g.addColorStop(0,'#2f9e68');g.addColorStop(1,'#0f5132');ctx.fillStyle=g;ctx.beginPath();ctx.moveTo(0,-46);ctx.quadraticCurveTo(-30,-8,-30,8);ctx.quadraticCurveTo(0,22,30,8);ctx.quadraticCurveTo(30,-8,0,-46);ctx.fill();g=ctx.createLinearGradient(0,-28,0,34);g.addColorStop(0,'#2b8a5f');g.addColorStop(1,'#0b3d2e');ctx.fillStyle=g;ctx.beginPath();ctx.moveTo(0,-28);ctx.quadraticCurveTo(-38,10,-34,30);ctx.quadraticCurveTo(0,44,34,30);ctx.quadraticCurveTo(38,10,0,-28);ctx.fill();ctx.fillStyle='rgba(255,255,255,.9)';ctx.beginPath();ctx.moveTo(0,-46);ctx.quadraticCurveTo(-16,-20,-24,2);ctx.quadraticCurveTo(-8,-6,0,-46);ctx.fill();}
   else if(ob.kind==='rock'){shadow(0,22,30,7,.25);let g=ctx.createLinearGradient(-30,-30,34,24);g.addColorStop(0,'#aab4c4');g.addColorStop(.55,'#697586');g.addColorStop(1,'#3b4657');ctx.fillStyle=g;ctx.beginPath();ctx.moveTo(-32,18);ctx.lineTo(-18,-20);ctx.lineTo(3,-32);ctx.lineTo(30,-11);ctx.lineTo(36,17);ctx.lineTo(12,26);ctx.lineTo(-20,23);ctx.closePath();ctx.fill();ctx.fillStyle='rgba(255,255,255,.35)';ctx.beginPath();ctx.moveTo(-18,-20);ctx.lineTo(3,-32);ctx.lineTo(18,-14);ctx.lineTo(-4,-7);ctx.fill();ctx.strokeStyle='rgba(20,30,45,.35)';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(-16,18);ctx.lineTo(20,10);ctx.stroke();}
@@ -305,7 +315,7 @@ function makeTerrain(game){return{y(x){const h=H;const pos=game.scroll+x;return 
 function drawObstacle(ob){ctx.save();ctx.translate(ob.x,ob.y);if(ob.kind==='tree'){shadow(0,46,26,7,.24);ctx.fillStyle='#6b4a2f';rr(-6,16,12,34,4);ctx.fill();const g=ctx.createLinearGradient(0,-54,0,34);g.addColorStop(0,'#f4fbff');g.addColorStop(1,'#8fd0ea');ctx.fillStyle=g;for(let i=0;i<4;i++){const y=-46+i*20,w=34+i*16;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(-w,y+28);ctx.lineTo(w,y+28);ctx.closePath();ctx.fill();ctx.fillStyle=i%2?'#bfe6f7':'#e9f8ff';}}
   else if(ob.kind==='rock'){shadow(0,22,34,8,.28);const g=ctx.createLinearGradient(-30,-30,34,24);g.addColorStop(0,'#8b93a3');g.addColorStop(1,'#2f3643');ctx.fillStyle=g;ctx.beginPath();ctx.moveTo(-34,18);ctx.lineTo(-22,-14);ctx.lineTo(-4,-30);ctx.lineTo(24,-18);ctx.lineTo(36,12);ctx.lineTo(14,26);ctx.lineTo(-20,24);ctx.closePath();ctx.fill();ctx.fillStyle='rgba(255,255,255,.9)';ctx.beginPath();ctx.moveTo(-22,-14);ctx.lineTo(-4,-30);ctx.lineTo(24,-18);ctx.lineTo(8,-8);ctx.lineTo(-14,-6);ctx.fill();ctx.strokeStyle='rgba(15,25,40,.35)';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(-16,16);ctx.lineTo(20,8);ctx.stroke();}
   else{shadow(0,36,52,9,.26);ctx.fillStyle='#6b442a';rr(-48,-4,96,44,5);ctx.fill();ctx.strokeStyle='#4a2c1c';ctx.lineWidth=4;for(let y=2;y<36;y+=12){ctx.beginPath();ctx.moveTo(-46,y);ctx.lineTo(46,y);ctx.stroke();}const g=ctx.createLinearGradient(0,-52,0,-2);g.addColorStop(0,'#ffffff');g.addColorStop(1,'#b7d9ec');ctx.fillStyle=g;ctx.beginPath();ctx.moveTo(-58,-4);ctx.lineTo(0,-52);ctx.lineTo(58,-4);ctx.closePath();ctx.fill();ctx.fillStyle='#1b2430';rr(-26,4,52,30,3);ctx.fill();ctx.fillStyle='#ffd166';rr(-8,12,16,22,2);ctx.fill();ctx.strokeStyle='#6b442a';ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(48,18);ctx.lineTo(84,18);ctx.moveTo(56,18);ctx.lineTo(56,34);ctx.moveTo(76,18);ctx.lineTo(76,34);ctx.stroke();}ctx.restore();}
-function drawWorld(){const g=game,shx=(Math.random()-.5)*g.shake*18,shy=(Math.random()-.5)*g.shake*12;ctx.save();ctx.translate(shx,shy);
+function drawWorld(){const g=game,shx=(Math.random()-.5)*g.shake*18,shy=(Math.random()-.5)*g.shake*12;ctx.save();ctx.translate(W/2,H/2);ctx.scale(g.zoom||1,g.zoom||1);ctx.translate(-W/2+shx,-H/2+shy);
   const sky=ctx.createLinearGradient(0,0,0,H);sky.addColorStop(0,'#0d2c46');sky.addColorStop(.58,'#1b5c82');sky.addColorStop(1,'#8fd8f4');ctx.fillStyle=sky;ctx.fillRect(-60,-60,W+120,H+120);
   ctx.fillStyle='rgba(255,255,255,.75)';for(let i=0;i<70;i++){const x=(i*197-(g.scroll*.03)%(W+200)+W+100)%(W+200)-100;const y=(i*89)%(H*.55);const r=(i%3)*.6+.7;ctx.globalAlpha=.25+(i%5)*.12;ctx.beginPath();ctx.arc(x,y,r,0,TAU);ctx.fill();}ctx.globalAlpha=1;
   // 远处深色山体和森林剪影
