@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>Ski Safari HTML5</title>
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#79c7ee;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;touch-action:none;user-select:none}
+  canvas{display:block;width:100vw;height:100vh}
+  .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(6,18,32,.55);color:#fff;text-align:center;padding:20px;z-index:5}
+  .panel{max-width:860px;background:rgba(10,25,45,.82);border:1px solid rgba(255,255,255,.25);border-radius:18px;padding:22px 26px;box-shadow:0 18px 60px rgba(0,0,0,.35)}
+  h1{margin:0 0 8px;font-size:34px;letter-spacing:2px}
+  p{line-height:1.65;margin:6px 0}
+  .btn{display:inline-block;margin-top:14px;padding:12px 26px;border-radius:999px;background:#ffb703;color:#182230;font-weight:800;border:0;cursor:pointer;box-shadow:0 6px 0 #d89b00}
+  .btn:active{transform:translateY(3px);box-shadow:0 3px 0 #d89b00}
+  .small{font-size:13px;opacity:.9}
+  .missions{text-align:left;display:inline-block;margin-top:8px;font-size:14px;line-height:1.7}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="menu" class="overlay">
+  <div class="panel">
+    <h1>滑雪大冒险</h1>
+    <p>雪崩来了！一直往右下滑行，跳过障碍、骑乘坐骑、做后空翻提高倍率。</p>
+    <p class="small">操作：点按/空格=跳跃；空中按住=后空翻；←/→ 或 A/D 微调；P 暂停。手机：点按跳，按住翻转。</p>
+    <div class="missions" id="missionList"></div>
+    <button class="btn" id="startBtn">开始逃生</button>
+    <p class="small">最高分：<span id="best">0</span>　星星：<span id="stars">0</span></p>
+  </div>
+</div>
+<div id="over" class="overlay hidden">
+  <div class="panel">
+    <h1>游戏结束</h1>
+    <p id="overReason"></p>
+    <p>得分 <b id="finalScore">0</b>　距离 <b id="finalDist">0</b> m　最高倍率 x<b id="finalMult">1</b></p>
+    <div class="missions" id="missionListOver"></div>
+    <button class="btn" id="retryBtn">再来一局</button>
+  </div>
+</div>
+<script>
+'use strict';
+/* ========================= 工具与配置 ========================= */
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+const menuEl=document.getElementById('menu');
+const overEl=document.getElementById('over');
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const rand=(a,b)=>a+Math.random()*(b-a);
+const TAU=Math.PI*2;
+let W=0,H=0,DPR=1;
+function resize(){DPR=Math.max(1,Math.min(2,window.devicePixelRatio||1));W=window.innerWidth;H=window.innerHeight;canvas.width=Math.floor(W*DPR);canvas.height=Math.floor(H*DPR);ctx.setTransform(DPR,0,0,DPR,0,0);}
+window.addEventListener('resize',resize);resize();
+
+const keys=new Set();
+let pointerDown=false;
+let pointerY=0;
+addEventListener('keydown',e=>{const k=e.key.toLowerCase();keys.add(k);if([' ','arrowup','arrowdown','arrowleft','arrowright'].includes(k))e.preventDefault();if(k===' '||k==='arrowup')game.jumpBuffer=0.14;if(k==='p')game.togglePause();if(k==='r'&&game.state==='over')game.start();});
+addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));
+canvas.addEventListener('pointerdown',e=>{pointerDown=true;pointerY=e.clientY;game.jumpBuffer=0.14;if(game.state==='menu')game.start();else if(game.state==='over')game.start();});
+addEventListener('pointerup',()=>{pointerDown=false;});
+addEventListener('pointermove',e=>{pointerY=e.clientY;});
+
+/* ========================= 任务与成就 ========================= */
+const store={
+  get(k,d){try{const v=localStorage.getItem('ski_'+k);return v==null?d:JSON.parse(v);}catch(e){return d;}},
+  set(k,v){try{localStorage.setItem('ski_'+k,JSON.stringify(v));}catch(e){}}
+};
+const missions=[
+  {id:'penguin3',name:'单局骑乘 3 只企鹅',star:1,check:g=>g.stats.penguins>=3},
+  {id:'doubleflip',name:'完成一次双后空翻',star:2,check:g=>g.stats.maxFlips>=2},
+  {id:'cloud10',name:'在 10 朵云上滑行',star:2,check:g=>g.stats.clouds>=10},
+  {id:'wolf250',name:'骑狼单次跳跃 250 米',star:3,check:g=>g.stats.wolfJump>=250},
+  {id:'shield2',name:'单局获得 2 次护盾',star:1,check:g=>g.stats.shields>=2},
+  {id:'mult8',name:'达到 8 倍倍率',star:3,check:g=>g.stats.maxMult>=8},
+];
+
+/* ========================= 地形：一直向下，不爬高 ========================= */
+function makeTerrain(game){
+  return {
+    // 可见区域永远左上高、右下低；只加平滑波浪，不做回爬坡。
+    y(x){const h=H;const pos=game.scroll+x;return h*0.74-x*0.085+Math.sin(pos*0.0042)*10+Math.sin(pos*0.0105+1.4)*6;},
+    slope(x){return Math.atan2(this.y(x+12)-this.y(x-12),24);},
+  };
+}
+
+/* ========================= 实体：障碍物/金币/道具/坐骑 ========================= */
+class Obstacle{
+  constructor(kind,x,y){this.kind=kind;this.x=x;this.y=y;this.passed=false;this.dead=false;
+    this.w=kind==='tree'?54:kind==='house'?86:64;this.h=kind==='tree'?86:kind==='house'?64:44;}
+  half(){return this.kind==='rock'?[this.w*.36,this.h*.30]:this.kind==='house'?[this.w*.42,this.h*.38]:[this.w*.24,this.h*.34];}
+}
+class Pickup{
+  constructor(kind,x,y,hover=110){this.kind=kind;this.x=x;this.y=y;this.hover=hover;this.phase=rand(0,TAU);this.dead=false;this.w=34;this.h=34;}
+}
+class Particle{
+  constructor(x,y,vx,vy,life,color,size){Object.assign(this,{x,y,vx,vy,life,color,size});this.max=life;}
+  update(dt){this.x+=this.vx*dt;this.y+=this.vy*dt;this.vy+=420*dt;this.life-=dt;return this.life>0;}
+  draw(){ctx.globalAlpha=clamp(this.life/this.max,0,1);ctx.fillStyle=this.color;ctx.beginPath();ctx.arc(this.x,this.y,this.size,0,TAU);ctx.fill();ctx.globalAlpha=1;}
+}
+class Cloud{
+  constructor(){this.x=W+rand(0,300);this.y=rand(H*0.08,H*0.38);this.s=rand(.7,1.5);this.counted=false;}
+}
+
+/* ========================= 主游戏对象 ========================= */
+const game={
+  state:'menu',terrain:null,scroll:0,distance:0,score:0,best:store.get('best',0),stars:store.get('stars',0),
+  speed:22,baseSpeed:22,mult:1,boostLevel:0,boostTimer:0,rocketTimer:0,magnetTimer:0,shield:0,reviveRocket:false,
+  player:null,obstacles:[],pickups:[],particles:[],clouds:[],mount:null,avalancheGap:560,shake:0,slowmo:0,
+  jumpBuffer:0,coyote:0,spawnT:.8,coinT:.4,powerT:5,mountT:7,cloudT:1.2,
+  stats:{},
+  init(){this.terrain=makeTerrain(this);this.resetStats();this.player=this.newPlayer();},
+  resetStats(){this.stats={penguins:0,maxFlips:0,clouds:0,wolfJump:0,shields:0,maxMult:1};},
+  newPlayer(){return{x:W*.28,y:H*.6,vy:0,onGround:true,flip:0,takeoffFlip:0,rot:0,alive:true,airNear:false};},
+  start(){this.state='play';menuEl.classList.add('hidden');overEl.classList.add('hidden');this.scroll=0;this.distance=0;this.score=0;this.mult=1;this.speed=this.baseSpeed=22;this.boostLevel=0;this.boostTimer=0;this.rocketTimer=0;this.magnetTimer=0;this.shield=0;this.reviveRocket=false;this.obstacles=[];this.pickups=[];this.particles=[];this.clouds=[];this.mount=null;this.avalancheGap=720;this.shake=0;this.jumpBuffer=0;this.coyote=0;this.spawnT=.8;this.coinT=.3;this.powerT=4;this.mountT=6;this.cloudT=.8;this.resetStats();this.player=this.newPlayer();},
+  togglePause(){if(this.state==='play')this.state='pause';else if(this.state==='pause')this.state='play';},
+  addScore(points,label,flash=true){this.score+=Math.round(points*this.mult);if(flash&&label)spawnText(label+' +'+Math.round(points*this.mult),this.player.x,this.player.y-70);},
+  bumpMult(v){this.mult=clamp(this.mult+v,1,8);this.stats.maxMult=Math.max(this.stats.maxMult,this.mult);},
+  jump(){const p=this.player;if(!p.alive)return;if(p.onGround||this.coyote>0){p.onGround=false;this.coyote=0;p.vy=650;p.takeoffFlip=p.flip;p.airNear=false;this.addScore(10,'Jump');}},
+  land(gy){const p=this.player;p.y=gy;p.onGround=true;const rel=p.flip-p.takeoffFlip;const diff=((rel-Math.round(rel/TAU)*TAU+Math.PI)%TAU+TAU)%TAU-Math.PI;const flips=Math.floor((rel+1.0)/TAU);this.stats.maxFlips=Math.max(this.stats.maxFlips,flips);if(Math.abs(diff)>.95){if(!this.absorbCrash('落地姿势不正')){this.crash('落地姿势不正');return;}}if(flips>=1){this.addScore(350*flips,'Backflip x'+flips);this.bumpMult(.8*flips);if(this.mount&&this.mount.kind==='eagle'){this.boost(1.4);spawnText('Eagle landing boost!',p.x,p.y-90);}}else if(p.airTime>0.35)this.addScore(p.airTime*35,'Air');p.vy=0;p.flip=Math.round(rel/TAU)*TAU+p.takeoffFlip;},
+  boost(level){this.boostLevel=clamp(this.boostLevel+level,0,3);this.boostTimer=4;if(level>=3)this.shield=Math.max(this.shield,1);},
+  absorbCrash(reason){
+    if(this.shield>0){this.shield--;spawnText('Shield -1',this.player.x,this.player.y-80);this.shake=.5;return true;}
+    const m=this.mount;
+    if(m){
+      if(m.kind==='snowmobile'&&(reason.includes('rock')||reason.includes('stone'))){spawnText('Smashed!',this.player.x,this.player.y-80);this.addScore(120,'Smash');return true;}
+      if(m.hits>0){m.hits--;this.shake=.5;spawnText(m.kind+' -1 hit',this.player.x,this.player.y-80);
+        if(m.kind==='penguin'||m.hits<=0){if(m.passenger){m.kind=m.passenger;m.hits=1;m.passenger=null;spawnText('Passenger saved you!',this.player.x,this.player.y-90);}else this.mount=null;}
+        else if(m.kind==='yeti'&&m.hits===1){m.skiMode=true;}
+        return true;}
+    }
+    if(this.reviveRocket){this.reviveRocket=false;this.rocketTimer=2.5;this.boost(3);this.avalancheGap+=260;spawnText('Revive rocket!',this.player.x,this.player.y-100);return true;}
+    return false;
+  },
+  crash(reason){const p=this.player;p.alive=false;this.mult=1;this.state='over';this.shake=1;for(let i=0;i<34;i++)this.particles.push(new Particle(p.x,p.y,rand(-320,320),rand(-420,80),rand(.5,1.1),'#ffffff',rand(2,5)));this.finish(reason);},
+  finish(reason){let gained=0;for(const m of missions)if(m.check(this)&&!store.get('done_'+m.id,false)){store.set('done_'+m.id,true);gained+=m.star;}this.stars+=gained;store.set('stars',this.stars);this.best=Math.max(this.best,Math.round(this.score));store.set('best',this.best);document.getElementById('finalScore').textContent=Math.round(this.score);document.getElementById('finalDist').textContent=this.distance.toFixed(0);document.getElementById('finalMult').textContent=this.stats.maxMult.toFixed(0);document.getElementById('overReason').textContent=reason;this.renderMissions(document.getElementById('missionListOver'));overEl.classList.remove('hidden');},
+  renderMissions(el){el.innerHTML='<b>任务/成就</b><br>'+missions.map(m=>{const done=store.get('done_'+m.id,false);const now=m.check(this);return `${done||now?'✅':'⬜'} ${m.name} <span class="small">+${m.star}★</span>`;}).join('<br>');},
+  spawnObstacle(){const right=this.obstacles.length?Math.max(...this.obstacles.map(o=>o.x)):0;const r=Math.random();const kind=r<.42?'tree':r<.78?'rock':'house';const x=Math.max(W+rand(280,460),right+rand(760,1120));const ob=new Obstacle(kind,x,this.terrain.y(x));this.obstacles.push(ob);},
+  spawnCoins(){const start=W+rand(80,180);for(let i=0;i<6;i++){const x=start+i*46;this.pickups.push(new Pickup('coin',x,this.terrain.y(x)+100+Math.sin(i*.9)*22,100));}},
+  spawnPower(){const w=W;const table=[['rocket',.22],['shield',.22],['magnet',.20],['cabin',.16],['revive',.10],['boost',.10]];let r=Math.random(),kind='boost',acc=0;for(const [k,p] of table){acc+=p;if(r<=acc){kind=k;break;}}const x=w+rand(220,420);this.pickups.push(new Pickup(kind,x,this.terrain.y(x)+136,136));},
+  spawnMount(){const d=this.distance;const choices=['penguin'];if(d>500)choices.push('eagle','yeti');if(d>1200)choices.push('snowmobile','wolf','eagle');const kind=choices[Math.floor(Math.random()*choices.length)];const x=W+rand(280,520);this.pickups.push(new Pickup(kind,x,this.terrain.y(x)+118,118));},
+  applyMount(kind){const tier={penguin:1,eagle:2,yeti:3,wolf:4,snowmobile:5};let hits={penguin:1,eagle:99,yeti:2,wolf:3,snowmobile:4}[kind]||1;let timer=kind==='eagle'?9:kind==='snowmobile'?16:kind==='wolf'?15:0;
+    if(this.mount){ // 高阶替换低阶；雪怪/雪地摩托可携带企鹅作为额外乘客
+      if(tier[kind]>tier[this.mount.kind]){this.mount={kind,hits,timer,passenger:this.mount.kind==='penguin'?'penguin':null};}
+      else if((this.mount.kind==='yeti'||this.mount.kind==='snowmobile'||this.mount.kind==='wolf')&&kind==='penguin'&&!this.mount.passenger){this.mount.passenger='penguin';this.mount.hits+=1;}
+      else {this.mount={kind,hits,timer,passenger:null};}
+    }else this.mount={kind,hits,timer,passenger:null};
+    if(kind==='penguin')this.stats.penguins++;this.bumpMult(1);this.addScore(200,kind+' ride');},
+  update(dt){
+    if(this.state!=='play')return;
+    dt=Math.min(dt,1/20);if(this.slowmo>0){this.slowmo-=dt;dt*=.55;}
+    const p=this.player;
+    // 输入缓冲/土狼时间，优化手感
+    this.jumpBuffer=Math.max(0,this.jumpBuffer-dt);if(p.onGround)this.coyote=.12;else this.coyote=Math.max(0,this.coyote-dt);
+    if(this.jumpBuffer>0){this.jumpBuffer=0;this.jump();}
+    // 速度：初始较快，仍随距离上升；道具/坐骑/火光叠加
+    let groundInput=0;if(pointerDown&&p.onGround){groundInput=pointerY<H*.28?-1:pointerY>H*.72?1:0;}if(keys.has('arrowup')||keys.has('w'))groundInput+=.7;if(keys.has('arrowdown')||keys.has('s'))groundInput-=.7;
+    const mountSpeed=this.mount?({penguin:3,eagle:1,yeti:5,wolf:10,snowmobile:9}[this.mount.kind]||0):0;
+    const boostSpeed=[0,4,8,13][this.boostLevel]+(this.rocketTimer>0?18:0);
+    this.speed=clamp(this.baseSpeed+this.distance*.0035+groundInput*4+mountSpeed+boostSpeed,20,86);
+    this.distance+=this.speed*dt;this.score+=this.speed*dt*2*this.mult;this.scroll+=this.speed*18*dt;
+    if(this.boostTimer>0){this.boostTimer-=dt;if(this.boostTimer<=0)this.boostLevel=0;}if(this.rocketTimer>0)this.rocketTimer-=dt;if(this.magnetTimer>0)this.magnetTimer-=dt;
+    if(this.mount&&this.mount.timer>0){this.mount.timer-=dt;if(this.mount.timer<=0){if(this.mount.kind==='eagle')p.vy=Math.min(p.vy,0);this.mount=null;}}
+    // 玩家物理与动作
+    const holdingFlip=pointerDown||keys.has(' ')||keys.has('arrowup');
+    const eagle=this.mount&&this.mount.kind==='eagle'&&this.mount.timer>0;
+    if(eagle){p.onGround=false;p.airTime=(p.airTime||0)+dt;if(holdingFlip){p.vy=clamp(p.vy+1050*dt,-430,600);p.flip+=5.8*dt;}else{p.vy=clamp(p.vy-560*dt,-560,600);const target=p.takeoffFlip+Math.round((p.flip-p.takeoffFlip)/TAU)*TAU;p.flip+=clamp(target-p.flip,-1,1)*6*dt;}p.y=clamp(p.y+p.vy*dt,this.terrain.y(p.x)+126,H*.94);}
+    else if(p.onGround){p.y=this.terrain.y(p.x)+34;p.vy=0;const target=-this.terrain.slope(p.x)+groundInput*-.06;p.rot+=clamp(target-p.rot,-1,1)*Math.min(1,14*dt);}
+    else{p.airTime=(p.airTime||0)+dt;p.vy-=1500*dt;p.y+=p.vy*dt;if(keys.has('arrowleft')||keys.has('a'))p.x=clamp(p.x-120*dt,W*.20,W*.40);if(keys.has('arrowright')||keys.has('d'))p.x=clamp(p.x+120*dt,W*.20,W*.40);if(holdingFlip)p.flip+=6.1*dt;else{const target=p.takeoffFlip+Math.round((p.flip-p.takeoffFlip)/TAU)*TAU;p.flip+=clamp(target-p.flip,-1,1)*6.2*dt;}const gy=this.terrain.y(p.x)+34;if(p.y<=gy&&p.vy<0)this.land(gy);}
+    // 生成实体：障碍更远，道具/金币可拾取
+    if(this.distance>120){this.spawnT-=dt;while(this.spawnT<=0){this.spawnObstacle();this.spawnT+=clamp(1.28-this.distance/26000,.86,1.28)*rand(1.15,1.85);}}else this.spawnT=1.0;
+    this.coinT-=dt;if(this.coinT<=0){this.spawnCoins();this.coinT=rand(.8,1.4);}this.powerT-=dt;if(this.powerT<=0){this.spawnPower();this.powerT=rand(5.5,9.5);}this.mountT-=dt;if(this.mountT<=0){this.spawnMount();this.mountT=rand(9,15);}this.cloudT-=dt;if(this.cloudT<=0){this.clouds.push(new Cloud());this.cloudT=rand(.8,1.6);}
+    const move=this.speed*18*dt;
+    // 障碍物更新与通过奖励
+    for(const ob of this.obstacles){ob.x-=move;ob.y=this.terrain.y(ob.x);if(!p.onGround&&Math.abs(ob.x-p.x)<110)p.airNear=true;if(!ob.passed&&ob.x+ob.w/2<p.x-34){ob.passed=true;if(p.airNear){this.addScore(80,'Near miss');this.bumpMult(.25);}p.airNear=false;}}
+    this.obstacles=this.obstacles.filter(o=>o.x+o.w/2>-160&&!o.dead);
+    // 道具/金币：每帧贴坡，磁铁吸附
+    for(const it of this.pickups){it.x-=move;let bob=Math.sin(this.scroll*.025+it.phase)*(it.kind==='coin'?5:8);it.y=this.terrain.y(it.x)+it.hover+bob;if(this.magnetTimer>0&&it.kind==='coin'){const dx=p.x-it.x,dy=p.y-it.y,d=Math.hypot(dx,dy);if(d<260){it.x+=dx*8*dt;it.y+=dy*8*dt;}}const dx=Math.abs(it.x-p.x),dy=Math.abs(it.y-p.y);if(dx<34&&dy<44){this.collect(it);it.dead=true;}}
+    this.pickups=this.pickups.filter(i=>i.x>-100&&!i.dead);
+    // 云朵任务：老鹰/高空穿过计数
+    for(const c of this.clouds){c.x-=move*.55;if(!c.counted&&Math.abs(c.x-p.x)<70&&Math.abs(c.y-p.y)<70&&p.y<this.terrain.y(p.x)+40){c.counted=true;this.stats.clouds++;this.addScore(30,'Cloud');}}
+    this.clouds=this.clouds.filter(c=>c.x>-160);
+    // 碰撞检测：先护盾/坐骑抵挡，蓝色加速/雪地摩托可撞碎石/房
+    const phw=22,phh=26;
+    if(!eagle&&p.alive)for(const ob of this.obstacles){const [ohw,ohh]=ob.half();if(Math.abs(ob.x-p.x)<ohw+phw&&Math.abs(ob.y-p.y)<ohh+phh){if(!p.onGround&&p.y-phh>ob.y+ohh*.62)continue;const smash=(this.boostLevel>=3||this.rocketTimer>0||(this.mount&&this.mount.kind==='snowmobile'))&&(ob.kind==='rock'||ob.kind==='house');if(smash){ob.dead=true;this.addScore(120,'Smash '+ob.kind);for(let i=0;i<14;i++)this.particles.push(new Particle(ob.x,ob.y,rand(-240,240),rand(-360,80),rand(.4,.9),'#dbe7f3',rand(2,5)));continue;}if(this.absorbCrash(ob.kind)){ob.dead=true;continue;}this.crash('撞上 '+ob.kind);break;}}
+    this.obstacles=this.obstacles.filter(o=>!o.dead);
+    // 雪崩追击：从左侧后方追，骑乘/火箭/道具会拉开距离
+    let avSpeed=16+this.distance*.0017;if(this.rocketTimer>0)this.avalancheGap+=180*dt;if(this.boostLevel>=2)this.avalancheGap+=70*dt;if(this.mount)this.avalancheGap+=30*dt;this.avalancheGap-=(avSpeed-this.speed)*18*dt;this.avalancheGap=clamp(this.avalancheGap,0,900);if(this.avalancheGap<38&&p.alive){if(!this.absorbCrash('雪崩'))this.crash('被雪崩吞没');}
+    // 粒子与震屏
+    if(this.boostLevel>0||this.rocketTimer>0||(this.mount&&this.mount.kind==='snowmobile')){const c=this.boostLevel>=3||this.rocketTimer>0?'#4cc9ff':this.boostLevel===2?'#ff4d4d':'#ffd166';this.particles.push(new Particle(p.x-24,p.y+18,rand(-160,-60),rand(40,140),rand(.25,.55),c,rand(3,7)));}
+    this.particles=this.particles.filter(pt=>pt.update(dt));if(this.shake>0)this.shake=Math.max(0,this.shake-dt*1.8);
+  },
+  collect(it){const k=it.kind;if(k==='coin'){this.addScore(50,'Coin');if(Math.random()<.18)this.bumpMult(.2);}else if(k==='boost'){this.boost(1);this.addScore(100,'Boost');}else if(k==='rocket'){this.rocketTimer=3.2;this.addScore(200,'Rocket');}else if(k==='revive'){this.reviveRocket=true;this.addScore(150,'Revive ready');}else if(k==='shield'){this.shield=Math.min(5,this.shield+2);this.stats.shields++;this.addScore(100,'Shield +2');}else if(k==='magnet'){this.magnetTimer=8;this.addScore(120,'Magnet');}else if(k==='cabin'){this.boost(2);this.addScore(180,'Cabin boost');}else this.applyMount(k);},
+};
+
+/* ========================= 文本粒子 ========================= */
+const texts=[];
+function spawnText(t,x,y){texts.push({t,x,y,life:1});}
+
+/* ========================= 绘制 ========================= */
+function drawPlayer(){const p=game.player;ctx.save();ctx.translate(p.x,p.y);const slope=game.terrain.slope(p.x);const ang=(-slope)+(p.onGround?0:-(p.flip-p.takeoffFlip));ctx.rotate(ang); // 地面贴坡，空中翻转
+  // 滑雪板
+  ctx.fillStyle='#2456a6';ctx.fillRect(-30,24,62,5);ctx.fillRect(-26,17,58,5);
+  // 腿/身体/头
+  ctx.strokeStyle='#263142';ctx.lineWidth=7;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(-8,18);ctx.lineTo(-14,28);ctx.moveTo(10,18);ctx.lineTo(18,27);ctx.stroke();
+  ctx.fillStyle='#e23b46';ctx.beginPath();ctx.moveTo(-16,-2);ctx.lineTo(12,-6);ctx.lineTo(20,20);ctx.lineTo(-12,24);ctx.closePath();ctx.fill();
+  ctx.fillStyle='#ffd166';ctx.fillRect(-12,2,28,4);
+  ctx.fillStyle='#f4c9a4';ctx.beginPath();ctx.arc(1,-14,10,0,TAU);ctx.fill();
+  ctx.fillStyle='#284b63';ctx.beginPath();ctx.moveTo(-12,-15);ctx.lineTo(1,-27);ctx.lineTo(15,-16);ctx.lineTo(9,-12);ctx.lineTo(-10,-11);ctx.closePath();ctx.fill();
+  ctx.fillStyle='#101820';ctx.fillRect(-8,-15,20,5);
+  // 坐骑显示在角色下方/后方
+  if(game.mount){ctx.globalAlpha=.95;drawMountIcon(game.mount.kind,-8,34,1);ctx.globalAlpha=1;}
+  ctx.restore();}
+function drawMountIcon(kind,x,y,s=1){ctx.save();ctx.translate(x,y);ctx.scale(s,s);if(kind==='penguin'){ctx.fillStyle='#28323c';ctx.beginPath();ctx.ellipse(0,0,18,24,0,0,TAU);ctx.fill();ctx.fillStyle='#fff';ctx.beginPath();ctx.ellipse(0,8,10,15,0,0,TAU);ctx.fill();ctx.fillStyle='#f5a623';ctx.beginPath();ctx.moveTo(-4,-10);ctx.lineTo(4,-10);ctx.lineTo(0,-5);ctx.fill();}
+  else if(kind==='yeti'){ctx.fillStyle='#f5fbff';ctx.beginPath();ctx.ellipse(0,0,22,28,0,0,TAU);ctx.fill();ctx.fillStyle='#9fd7f2';ctx.beginPath();ctx.ellipse(0,-8,13,10,0,0,TAU);ctx.fill();ctx.fillStyle='#182430';ctx.fillRect(-7,-12,4,4);ctx.fillRect(4,-12,4,4);}
+  else if(kind==='eagle'){ctx.fillStyle='#7a522d';ctx.beginPath();ctx.moveTo(-28,0);ctx.lineTo(0,-16);ctx.lineTo(30,-4);ctx.lineTo(10,4);ctx.lineTo(28,18);ctx.lineTo(2,10);ctx.lineTo(-24,18);ctx.fill();ctx.fillStyle='#f2f2f2';ctx.fillRect(0,-16,10,8);}
+  else if(kind==='wolf'){ctx.fillStyle='#8a94a6';ctx.beginPath();ctx.ellipse(0,4,26,14,0,0,TAU);ctx.fill();ctx.beginPath();ctx.moveTo(18,-4);ctx.lineTo(34,-12);ctx.lineTo(30,4);ctx.fill();ctx.fillStyle='#fff';ctx.fillRect(24,-5,5,4);}
+  else if(kind==='snowmobile'){ctx.fillStyle='#d62828';ctx.beginPath();ctx.moveTo(-34,6);ctx.lineTo(-10,-12);ctx.lineTo(24,-10);ctx.lineTo(36,8);ctx.lineTo(18,14);ctx.lineTo(-20,14);ctx.fill();ctx.strokeStyle='#263142';ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(-30,18);ctx.lineTo(34,18);ctx.stroke();ctx.strokeStyle='#8d99ae';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(-22,22);ctx.lineTo(26,22);ctx.stroke();}
+  ctx.restore();}
+function drawObstacle(ob){ctx.save();ctx.translate(ob.x,ob.y);if(ob.kind==='tree'){ctx.fillStyle='#7a4a2b';ctx.fillRect(-5,18,10,28);ctx.fillStyle='#1c6b4a';ctx.beginPath();ctx.moveTo(0,-42);ctx.lineTo(-28,6);ctx.lineTo(28,6);ctx.fill();ctx.fillStyle='#17603f';ctx.beginPath();ctx.moveTo(0,-26);ctx.lineTo(-34,26);ctx.lineTo(34,26);ctx.fill();ctx.fillStyle='rgba(255,255,255,.85)';ctx.beginPath();ctx.moveTo(0,-42);ctx.lineTo(-14,-12);ctx.lineTo(14,-12);ctx.fill();}
+  else if(ob.kind==='rock'){ctx.fillStyle='#697586';ctx.beginPath();ctx.moveTo(-30,18);ctx.lineTo(-18,-18);ctx.lineTo(2,-30);ctx.lineTo(28,-10);ctx.lineTo(34,16);ctx.lineTo(12,24);ctx.lineTo(-18,22);ctx.fill();ctx.fillStyle='#98a2b3';ctx.beginPath();ctx.moveTo(-18,-18);ctx.lineTo(2,-30);ctx.lineTo(18,-14);ctx.lineTo(-2,-8);ctx.fill();}
+  else{ctx.fillStyle='#a15c3f';ctx.fillRect(-42,-8,84,42);ctx.fillStyle='#7a3f2c';ctx.beginPath();ctx.moveTo(-50,-8);ctx.lineTo(0,-42);ctx.lineTo(50,-8);ctx.fill();ctx.fillStyle='#ffd166';ctx.fillRect(-10,10,20,24);ctx.fillStyle='#fff';ctx.fillRect(-46,-10,92,8);}ctx.restore();}
+function drawPickup(it){ctx.save();ctx.translate(it.x,it.y);const k=it.kind;if(k==='coin'){ctx.fillStyle='#f9c74f';ctx.beginPath();ctx.arc(0,0,15,0,TAU);ctx.fill();ctx.strokeStyle='#b98218';ctx.lineWidth=3;ctx.stroke();ctx.fillStyle='#ffec99';ctx.beginPath();ctx.arc(-4,-4,6,0,TAU);ctx.fill();}
+  else if(k==='shield'){ctx.fillStyle='#38bdf8';ctx.beginPath();ctx.moveTo(0,-18);ctx.lineTo(16,-10);ctx.lineTo(14,8);ctx.lineTo(0,20);ctx.lineTo(-14,8);ctx.lineTo(-16,-10);ctx.fill();ctx.strokeStyle='#0e5282';ctx.lineWidth=3;ctx.stroke();}
+  else if(k==='rocket'||k==='revive'){ctx.fillStyle=k==='rocket'?'#ef4444':'#22c55e';ctx.beginPath();ctx.moveTo(0,-20);ctx.lineTo(12,8);ctx.lineTo(0,18);ctx.lineTo(-12,8);ctx.fill();ctx.fillStyle='#fff';ctx.fillRect(-5,-4,10,8);}
+  else if(k==='magnet'){ctx.strokeStyle='#ef476f';ctx.lineWidth=8;ctx.beginPath();ctx.arc(0,0,14,Math.PI,TAU);ctx.stroke();ctx.fillStyle='#ffd166';ctx.fillRect(-16,-4,8,12);ctx.fillRect(8,-4,8,12);}
+  else if(k==='cabin'){ctx.fillStyle='#8b5a2b';ctx.fillRect(-16,-10,32,24);ctx.fillStyle='#ffb703';ctx.fillRect(-5,0,10,14);ctx.strokeStyle='#ffd166';ctx.strokeRect(-20,-14,40,32);}
+  else if(k==='boost'){ctx.fillStyle='#ef4444';ctx.beginPath();ctx.roundRect(-12,-18,24,36,7);ctx.fill();ctx.fillStyle='#fff';ctx.beginPath();ctx.moveTo(2,-12);ctx.lineTo(-8,4);ctx.lineTo(0,4);ctx.lineTo(-4,16);ctx.lineTo(10,0);ctx.lineTo(2,0);ctx.fill();}
+  else drawMountIcon(k,0,0,.75);ctx.restore();}
+function drawWorld(){const g=game,shx=(Math.random()-.5)*g.shake*18,shy=(Math.random()-.5)*g.shake*12;ctx.save();ctx.translate(shx,shy);
+  // 背景：平滑远山曲线+天空，不用三角形素材
+  const sky=ctx.createLinearGradient(0,0,0,H);sky.addColorStop(0,'#79c7ee');sky.addColorStop(.6,'#cfeeff');sky.addColorStop(1,'#f7fcff');ctx.fillStyle=sky;ctx.fillRect(-30,-30,W+60,H+60);
+  ctx.fillStyle='#a9cbe8';for(let i=-2;i<8;i++){const x=i*260-(g.scroll*.12)%260;ctx.beginPath();ctx.moveTo(x,H*.62);ctx.quadraticCurveTo(x+90,H*.20,x+180,H*.58);ctx.quadraticCurveTo(x+230,H*.42,x+300,H*.62);ctx.closePath();ctx.fill();}
+  ctx.fillStyle='#e8f6ff';for(let i=-2;i<8;i++){const x=i*300-(g.scroll*.22)%300;ctx.beginPath();ctx.moveTo(x,H*.70);ctx.quadraticCurveTo(x+110,H*.42,x+220,H*.68);ctx.closePath();ctx.fill();}
+  // 云
+  ctx.fillStyle='rgba(255,255,255,.9)';for(const c of g.clouds){ctx.save();ctx.translate(c.x,c.y);ctx.scale(c.s,c.s);ctx.beginPath();ctx.arc(-22,6,18,0,TAU);ctx.arc(0,-4,24,0,TAU);ctx.arc(24,6,18,0,TAU);ctx.fill();ctx.restore();}
+  // 填充坡面：从左上到右下一直向下
+  const pts=[];for(let x=-80;x<=W+80;x+=40)pts.push([x,g.terrain.y(x)]);ctx.beginPath();ctx.moveTo(-80,H+80);for(const [x,y] of pts)ctx.lineTo(x,y);ctx.lineTo(W+80,H+80);ctx.closePath();ctx.fillStyle='#f5fbff';ctx.fill();ctx.strokeStyle='#c6e4f6';ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(pts[0][0],pts[0][1]);for(const [x,y] of pts)ctx.lineTo(x,y);ctx.stroke();
+  // 松树远景
+  for(let i=0;i<10;i++){const x=(i*173-(g.scroll*.35)%173+W)%W;const y=g.terrain.y(x)+8;ctx.globalAlpha=.35;drawObstacle({kind:'tree',x,y,w:40,h:64});ctx.globalAlpha=1;}
+  for(const it of g.pickups)drawPickup(it);for(const ob of g.obstacles)drawObstacle(ob);drawPlayer();
+  // 雪崩雪墙
+  const ax=g.player.x-g.avalancheGap;if(ax>-260){const grad=ctx.createLinearGradient(ax-120,0,ax+80,0);grad.addColorStop(0,'rgba(255,255,255,0)');grad.addColorStop(.4,'rgba(255,255,255,.85)');grad.addColorStop(1,'rgba(210,235,250,.95)');ctx.fillStyle=grad;ctx.beginPath();ctx.moveTo(ax-160,-40);for(let y=-40;y<=H+80;y+=80){ctx.quadraticCurveTo(ax+rand(-20,20),y+40,ax-120,y+80);}ctx.lineTo(ax-260,H+80);ctx.lineTo(ax-260,-40);ctx.fill();}
+  for(const pt of g.particles)pt.draw();
+  // 文本粒子
+  ctx.textAlign='center';ctx.font='bold 22px system-ui';for(const t of texts){ctx.globalAlpha=clamp(t.life,0,1);ctx.fillStyle='#0b3d91';ctx.strokeStyle='#fff';ctx.lineWidth=4;ctx.strokeText(t.t,t.x,t.y);ctx.fillText(t.t,t.x,t.y);}ctx.globalAlpha=1;
+  ctx.restore();}
+function drawHUD(){const g=game;ctx.fillStyle='rgba(8,20,38,.45)';ctx.fillRect(8,8,250,86);ctx.fillRect(W-268,8,260,76);ctx.fillStyle='#fff';ctx.font='bold 20px system-ui';ctx.textAlign='right';ctx.fillText('Score '+Math.round(g.score),W-24,36);ctx.fillStyle='#ffd166';ctx.fillText('x'+g.mult.toFixed(1),W-24,66);ctx.textAlign='left';let line1=g.mount?g.mount.kind+(g.mount.timer>0?' '+g.mount.timer.toFixed(0)+'s':' x'+g.mount.hits)+(g.mount.passenger?' +penguin':''):'on foot';ctx.fillText(line1,20,34);ctx.fillText('shield '+g.shield+(g.reviveRocket?'  revive':''),20,62); // 雪崩距离图标：越近越大越抖
+  const danger=1-clamp(g.avalancheGap/700,0,1);const s=24+danger*54+(danger>.7?Math.random()*8:0);ctx.save();ctx.translate(34,116);ctx.fillStyle='rgba(255,255,255,.85)';ctx.beginPath();ctx.arc(0,0,s/2,0,TAU);ctx.fill();ctx.strokeStyle=danger>.65?'#ef4444':'#38bdf8';ctx.lineWidth=4;ctx.stroke();ctx.fillStyle=danger>.65?'#ef4444':'#0b3d91';ctx.font='bold 14px system-ui';ctx.textAlign='center';ctx.fillText('雪崩',0,5);ctx.restore();}
+
+/* ========================= 主循环与状态切换 ========================= */
+let last=performance.now();
+function loop(now){const dt=(now-last)/1000;last=now;if(game.state==='play')game.update(dt);for(const t of texts){t.y-=46*dt;t.life-=dt;}for(let i=texts.length-1;i>=0;i--)if(texts[i].life<=0)texts.splice(i,1);if(game.state!=='menu'){drawWorld();drawHUD();if(game.state==='pause'){ctx.fillStyle='rgba(0,0,0,.45)';ctx.fillRect(0,0,W,H);ctx.fillStyle='#fff';ctx.font='bold 44px system-ui';ctx.textAlign='center';ctx.fillText('PAUSED',W/2,H/2);}}requestAnimationFrame(loop);}
+document.getElementById('startBtn').onclick=()=>game.start();document.getElementById('retryBtn').onclick=()=>game.start();
+game.init();game.renderMissions(document.getElementById('missionList'));document.getElementById('best').textContent=game.best;document.getElementById('stars').textContent=game.stars;requestAnimationFrame(loop);
+</script>
+</body>
+</html>
