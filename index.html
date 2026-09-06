@@ -80,7 +80,7 @@ const missions=[
 function makeTerrain(game){
   return {
     // 可见区域永远左上高、右下低；只加平滑波浪，不做回爬坡。
-    y(x){const h=H;const pos=game.scroll+x;return h*0.74-x*0.085+Math.sin(pos*0.0042)*10+Math.sin(pos*0.0105+1.4)*6;},
+    y(x){const h=H;const pos=game.scroll+x;return h*0.30+x*0.095+Math.sin(pos*0.0042)*10+Math.sin(pos*0.0105+1.4)*6;},
     slope(x){return Math.atan2(this.y(x+12)-this.y(x-12),24);},
   };
 }
@@ -117,7 +117,7 @@ const game={
   togglePause(){if(this.state==='play')this.state='pause';else if(this.state==='pause')this.state='play';},
   addScore(points,label,flash=true){this.score+=Math.round(points*this.mult);if(flash&&label)spawnText(label+' +'+Math.round(points*this.mult),this.player.x,this.player.y-70);},
   bumpMult(v){this.mult=clamp(this.mult+v,1,8);this.stats.maxMult=Math.max(this.stats.maxMult,this.mult);},
-  jump(){const p=this.player;if(!p.alive)return;if(p.onGround||this.coyote>0){p.onGround=false;this.coyote=0;p.vy=650;p.takeoffFlip=p.flip;p.airNear=false;this.addScore(10,'Jump');}},
+  jump(){const p=this.player;if(!p.alive)return;if(p.onGround||this.coyote>0){p.onGround=false;this.coyote=0;p.vy=-640;p.takeoffFlip=p.flip;p.airNear=false;this.addScore(10,'Jump');}},
   land(gy){const p=this.player;p.y=gy;p.onGround=true;const rel=p.flip-p.takeoffFlip;const diff=((rel-Math.round(rel/TAU)*TAU+Math.PI)%TAU+TAU)%TAU-Math.PI;const flips=Math.floor((rel+1.0)/TAU);this.stats.maxFlips=Math.max(this.stats.maxFlips,flips);if(Math.abs(diff)>.95){if(!this.absorbCrash('落地姿势不正')){this.crash('落地姿势不正');return;}}if(flips>=1){this.addScore(350*flips,'Backflip x'+flips);this.bumpMult(.8*flips);if(this.mount&&this.mount.kind==='eagle'){this.boost(1.4);spawnText('Eagle landing boost!',p.x,p.y-90);}}else if(p.airTime>0.35)this.addScore(p.airTime*35,'Air');p.vy=0;p.flip=Math.round(rel/TAU)*TAU+p.takeoffFlip;},
   boost(level){this.boostLevel=clamp(this.boostLevel+level,0,3);this.boostTimer=4;if(level>=3)this.shield=Math.max(this.shield,1);},
   absorbCrash(reason){
@@ -137,9 +137,9 @@ const game={
   finish(reason){let gained=0;for(const m of missions)if(m.check(this)&&!store.get('done_'+m.id,false)){store.set('done_'+m.id,true);gained+=m.star;}this.stars+=gained;store.set('stars',this.stars);this.best=Math.max(this.best,Math.round(this.score));store.set('best',this.best);document.getElementById('finalScore').textContent=Math.round(this.score);document.getElementById('finalDist').textContent=this.distance.toFixed(0);document.getElementById('finalMult').textContent=this.stats.maxMult.toFixed(0);document.getElementById('overReason').textContent=reason;this.renderMissions(document.getElementById('missionListOver'));overEl.classList.remove('hidden');},
   renderMissions(el){el.innerHTML='<b>任务/成就</b><br>'+missions.map(m=>{const done=store.get('done_'+m.id,false);const now=m.check(this);return `${done||now?'✅':'⬜'} ${m.name} <span class="small">+${m.star}★</span>`;}).join('<br>');},
   spawnObstacle(){const right=this.obstacles.length?Math.max(...this.obstacles.map(o=>o.x)):0;const r=Math.random();const kind=r<.42?'tree':r<.78?'rock':'house';const x=Math.max(W+rand(280,460),right+rand(760,1120));const ob=new Obstacle(kind,x,this.terrain.y(x));this.obstacles.push(ob);},
-  spawnCoins(){const start=W+rand(80,180);for(let i=0;i<6;i++){const x=start+i*46;this.pickups.push(new Pickup('coin',x,this.terrain.y(x)+100+Math.sin(i*.9)*22,100));}},
-  spawnPower(){const w=W;const table=[['rocket',.22],['shield',.22],['magnet',.20],['cabin',.16],['revive',.10],['boost',.10]];let r=Math.random(),kind='boost',acc=0;for(const [k,p] of table){acc+=p;if(r<=acc){kind=k;break;}}const x=w+rand(220,420);this.pickups.push(new Pickup(kind,x,this.terrain.y(x)+136,136));},
-  spawnMount(){const d=this.distance;const choices=['penguin'];if(d>500)choices.push('eagle','yeti');if(d>1200)choices.push('snowmobile','wolf','eagle');const kind=choices[Math.floor(Math.random()*choices.length)];const x=W+rand(280,520);this.pickups.push(new Pickup(kind,x,this.terrain.y(x)+118,118));},
+  spawnCoins(){const start=W+rand(80,180);for(let i=0;i<6;i++){const x=start+i*46;this.pickups.push(new Pickup('coin',x,this.terrain.y(x)-100+Math.sin(i*.9)*22,100));}},
+  spawnPower(){const w=W;const table=[['rocket',.22],['shield',.22],['magnet',.20],['cabin',.16],['revive',.10],['boost',.10]];let r=Math.random(),kind='boost',acc=0;for(const [k,p] of table){acc+=p;if(r<=acc){kind=k;break;}}const x=w+rand(220,420);this.pickups.push(new Pickup(kind,x,this.terrain.y(x)-136,136));},
+  spawnMount(){const d=this.distance;const choices=['penguin'];if(d>500)choices.push('eagle','yeti');if(d>1200)choices.push('snowmobile','wolf','eagle');const kind=choices[Math.floor(Math.random()*choices.length)];const x=W+rand(280,520);this.pickups.push(new Pickup(kind,x,this.terrain.y(x)-118,118));},
   applyMount(kind){const tier={penguin:1,eagle:2,yeti:3,wolf:4,snowmobile:5};let hits={penguin:1,eagle:99,yeti:2,wolf:3,snowmobile:4}[kind]||1;let timer=kind==='eagle'?9:kind==='snowmobile'?16:kind==='wolf'?15:0;
     if(this.mount){ // 高阶替换低阶；雪怪/雪地摩托可携带企鹅作为额外乘客
       if(tier[kind]>tier[this.mount.kind]){this.mount={kind,hits,timer,passenger:this.mount.kind==='penguin'?'penguin':null};}
@@ -165,9 +165,9 @@ const game={
     // 玩家物理与动作
     const holdingFlip=pointerDown||keys.has(' ')||keys.has('arrowup');
     const eagle=this.mount&&this.mount.kind==='eagle'&&this.mount.timer>0;
-    if(eagle){p.onGround=false;p.airTime=(p.airTime||0)+dt;if(holdingFlip){p.vy=clamp(p.vy+1050*dt,-430,600);p.flip+=5.8*dt;}else{p.vy=clamp(p.vy-560*dt,-560,600);const target=p.takeoffFlip+Math.round((p.flip-p.takeoffFlip)/TAU)*TAU;p.flip+=clamp(target-p.flip,-1,1)*6*dt;}p.y=clamp(p.y+p.vy*dt,this.terrain.y(p.x)+126,H*.94);}
-    else if(p.onGround){p.y=this.terrain.y(p.x)+34;p.vy=0;const target=-this.terrain.slope(p.x)+groundInput*-.06;p.rot+=clamp(target-p.rot,-1,1)*Math.min(1,14*dt);}
-    else{p.airTime=(p.airTime||0)+dt;p.vy-=1500*dt;p.y+=p.vy*dt;if(keys.has('arrowleft')||keys.has('a'))p.x=clamp(p.x-120*dt,W*.20,W*.40);if(keys.has('arrowright')||keys.has('d'))p.x=clamp(p.x+120*dt,W*.20,W*.40);if(holdingFlip)p.flip+=6.1*dt;else{const target=p.takeoffFlip+Math.round((p.flip-p.takeoffFlip)/TAU)*TAU;p.flip+=clamp(target-p.flip,-1,1)*6.2*dt;}const gy=this.terrain.y(p.x)+34;if(p.y<=gy&&p.vy<0)this.land(gy);}
+    if(eagle){p.onGround=false;p.airTime=(p.airTime||0)+dt;if(holdingFlip){p.vy=clamp(p.vy-1050*dt,-600,430);p.flip+=5.8*dt;}else{p.vy=clamp(p.vy+560*dt,-430,560);const target=p.takeoffFlip+Math.round((p.flip-p.takeoffFlip)/TAU)*TAU;p.flip+=clamp(target-p.flip,-1,1)*6*dt;}p.y=clamp(p.y+p.vy*dt,H*.06,this.terrain.y(p.x)-126);}
+    else if(p.onGround){p.y=this.terrain.y(p.x)-34;p.vy=0;const target=this.terrain.slope(p.x)+groundInput*.06;p.rot+=clamp(target-p.rot,-1,1)*Math.min(1,14*dt);}
+    else{p.airTime=(p.airTime||0)+dt;p.vy+=1500*dt;p.y+=p.vy*dt;if(keys.has('arrowleft')||keys.has('a'))p.x=clamp(p.x-120*dt,W*.20,W*.40);if(keys.has('arrowright')||keys.has('d'))p.x=clamp(p.x+120*dt,W*.20,W*.40);if(holdingFlip)p.flip+=6.1*dt;else{const target=p.takeoffFlip+Math.round((p.flip-p.takeoffFlip)/TAU)*TAU;p.flip+=clamp(target-p.flip,-1,1)*6.2*dt;}const gy=this.terrain.y(p.x)-34;if(p.y>=gy&&p.vy>0)this.land(gy);}
     // 生成实体：障碍更远，道具/金币可拾取
     if(this.distance>120){this.spawnT-=dt;while(this.spawnT<=0){this.spawnObstacle();this.spawnT+=clamp(1.28-this.distance/26000,.86,1.28)*rand(1.15,1.85);}}else this.spawnT=1.0;
     this.coinT-=dt;if(this.coinT<=0){this.spawnCoins();this.coinT=rand(.8,1.4);}this.powerT-=dt;if(this.powerT<=0){this.spawnPower();this.powerT=rand(5.5,9.5);}this.mountT-=dt;if(this.mountT<=0){this.spawnMount();this.mountT=rand(9,15);}this.cloudT-=dt;if(this.cloudT<=0){this.clouds.push(new Cloud());this.cloudT=rand(.8,1.6);}
@@ -176,10 +176,10 @@ const game={
     for(const ob of this.obstacles){ob.x-=move;ob.y=this.terrain.y(ob.x);if(!p.onGround&&Math.abs(ob.x-p.x)<110)p.airNear=true;if(!ob.passed&&ob.x+ob.w/2<p.x-34){ob.passed=true;if(p.airNear){this.addScore(80,'Near miss');this.bumpMult(.25);}p.airNear=false;}}
     this.obstacles=this.obstacles.filter(o=>o.x+o.w/2>-160&&!o.dead);
     // 道具/金币：每帧贴坡，磁铁吸附
-    for(const it of this.pickups){it.x-=move;let bob=Math.sin(this.scroll*.025+it.phase)*(it.kind==='coin'?5:8);it.y=this.terrain.y(it.x)+it.hover+bob;if(this.magnetTimer>0&&it.kind==='coin'){const dx=p.x-it.x,dy=p.y-it.y,d=Math.hypot(dx,dy);if(d<260){it.x+=dx*8*dt;it.y+=dy*8*dt;}}const dx=Math.abs(it.x-p.x),dy=Math.abs(it.y-p.y);if(dx<34&&dy<44){this.collect(it);it.dead=true;}}
+    for(const it of this.pickups){it.x-=move;let bob=Math.sin(this.scroll*.025+it.phase)*(it.kind==='coin'?5:8);it.y=this.terrain.y(it.x)-it.hover+bob;if(this.magnetTimer>0&&it.kind==='coin'){const dx=p.x-it.x,dy=p.y-it.y,d=Math.hypot(dx,dy);if(d<260){it.x+=dx*8*dt;it.y+=dy*8*dt;}}const dx=Math.abs(it.x-p.x),dy=Math.abs(it.y-p.y);if(dx<34&&dy<44){this.collect(it);it.dead=true;}}
     this.pickups=this.pickups.filter(i=>i.x>-100&&!i.dead);
     // 云朵任务：老鹰/高空穿过计数
-    for(const c of this.clouds){c.x-=move*.55;if(!c.counted&&Math.abs(c.x-p.x)<70&&Math.abs(c.y-p.y)<70&&p.y<this.terrain.y(p.x)+40){c.counted=true;this.stats.clouds++;this.addScore(30,'Cloud');}}
+    for(const c of this.clouds){c.x-=move*.55;if(!c.counted&&Math.abs(c.x-p.x)<70&&Math.abs(c.y-p.y)<70&&p.y<this.terrain.y(p.x)-40){c.counted=true;this.stats.clouds++;this.addScore(30,'Cloud');}}
     this.clouds=this.clouds.filter(c=>c.x>-160);
     // 碰撞检测：先护盾/坐骑抵挡，蓝色加速/雪地摩托可撞碎石/房
     const phw=22,phh=26;
@@ -199,7 +199,7 @@ const texts=[];
 function spawnText(t,x,y){texts.push({t,x,y,life:1});}
 
 /* ========================= 绘制 ========================= */
-function drawPlayer(){const p=game.player;ctx.save();ctx.translate(p.x,p.y);const slope=game.terrain.slope(p.x);const ang=(-slope)+(p.onGround?0:-(p.flip-p.takeoffFlip));ctx.rotate(ang); // 地面贴坡，空中翻转
+function drawPlayer(){const p=game.player;ctx.save();ctx.translate(p.x,p.y);const slope=game.terrain.slope(p.x);const ang=slope-(p.onGround?0:(p.flip-p.takeoffFlip));ctx.rotate(ang); // 地面贴坡，空中翻转
   // 滑雪板
   ctx.fillStyle='#2456a6';ctx.fillRect(-30,24,62,5);ctx.fillRect(-26,17,58,5);
   // 腿/身体/头
